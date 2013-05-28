@@ -30,20 +30,20 @@ import org.w3c.dom.NodeList;
 import javax.annotation.PostConstruct;
 
 /**
- * TODO: Make this an independent jar file. This will decouple the depandancy to
- * Code Conversion
- *
+ * Replaces codes in FHIR structure based on XPATH
+ * Could be generalized more....
+ * 
  * @author Jerry Goodnough
  */
 public class FHIRCodeTranslator implements TransformStep
 {
+
     private List<XMLNamespace> namespaceList;
 
     public void setNamespaceList(List<XMLNamespace> namespaceList)
     {
         this.namespaceList = namespaceList;
     }
-    
     private List<CodeReplacement> replacementList;
 
     public List<CodeReplacement> getReplacementList()
@@ -61,28 +61,30 @@ public class FHIRCodeTranslator implements TransformStep
     {
         return codeProcessor;
     }
- 
+
     public void setCodeProcessor(SearchProcessor codeProcessor)
     {
         this.codeProcessor = codeProcessor;
     }
-   
-    private SimpleNamespaceContext context = new SimpleNamespaceContext();
-   
-    @PostConstruct 
+    
+    private SimpleNamespaceContext nameContext = new SimpleNamespaceContext();
+
+    @PostConstruct
     public void initialize()
     {
-        context.bindDefaultNamespaceUri("http://hl7.org/fhir");
-        context.bindNamespaceUri("fhir", "http://hl7.org/fhir"); 
+        nameContext.bindNamespaceUri("fhir", "http://hl7.org/fhir");
+        nameContext.bindDefaultNamespaceUri("http://hl7.org/fhir"); 
+        
         if (namespaceList != null)
         {
             Iterator<XMLNamespace> itr = namespaceList.iterator();
-            while(itr.hasNext())
+            while (itr.hasNext())
             {
-                XMLNamespace ns = itr.next() ;
-                context.bindNamespaceUri(ns.getPrefix(), ns.getURI());
+                XMLNamespace ns = itr.next();
+                nameContext.bindNamespaceUri(ns.getPrefix(), ns.getURI());
             }
         }
+        
     }
 
     public void transform(StreamSource src, StreamResult result, Properties props) throws TransformerException
@@ -90,7 +92,7 @@ public class FHIRCodeTranslator implements TransformStep
         //TODO: Consider added XPathVariable Resolver..
         this.transform(src, result);
     }
-    
+
     public void transform(StreamSource src, StreamResult result) throws TransformerException
     {
         try
@@ -100,21 +102,21 @@ public class FHIRCodeTranslator implements TransformStep
             dbf.setNamespaceAware(true);
             //System.out.println("Document Builder Factory class = "+dbf.getClass().getCanonicalName());
             Document doc = dbf.newDocumentBuilder().parse(src.getInputStream());
-        
+
             XPathFactory xpf = XPathFactory.newInstance(XPathConstants.DOM_OBJECT_MODEL);
-            
+
             //System.out.println("XPath Factory class = "+xpf.getClass().getCanonicalName());
             XPath xpath = xpf.newXPath();
-   
-            xpath.setNamespaceContext(context);
-            
+
+            xpath.setNamespaceContext(nameContext);
+
             Iterator<CodeReplacement> itr = this.replacementList.iterator();
             while (itr.hasNext())
             {
                 CodeReplacement cr = itr.next();
-                String path  = cr.getXPath();
+                String path = cr.getXPath();
                 XPathExpression exp = xpath.compile(path);
-                NodeList nodes = (NodeList) exp.evaluate(doc,XPathConstants.NODESET);
+                NodeList nodes = (NodeList) exp.evaluate(doc, XPathConstants.NODESET);
                 int nodesFnd = nodes.getLength();
                 for (int idx = 0; idx < nodesFnd; idx++)
                 {
@@ -139,19 +141,25 @@ public class FHIRCodeTranslator implements TransformStep
                         }
                     }
 
-                    String sourceCode = code.getNodeValue();
-                    String sourceText = display == null ? "" : display.getNodeValue();
-                    CodeReference fnd = codeProcessor.findCode(cr.getTargetSystem(), sourceSystem, sourceCode, sourceText);
-                    if (fnd != null)
+                    if (code != null)
                     {
-                        if (system != null)
+                        String sourceCode = code.getNodeValue();
+                        if ((sourceCode != null) && (!sourceCode.isEmpty()))
                         {
-                            system.setNodeValue(fnd.getSystem());
-                        }
-                        code.setNodeValue(fnd.getCode());
-                        if (cr.getReplaceDisplay() && (display != null))
-                        {
-                            display.setNodeValue(fnd.getDisplay());
+                            String sourceText = display == null ? "" : display.getNodeValue();
+                            CodeReference fnd = codeProcessor.findCode(cr.getTargetSystem(), sourceSystem, sourceCode, sourceText);
+                            if (fnd != null)
+                            {
+                                if (system != null)
+                                {
+                                    system.setNodeValue(fnd.getSystem());
+                                }
+                                code.setNodeValue(fnd.getCode());
+                                if (cr.getReplaceDisplay() && (display != null))
+                                {
+                                    display.setNodeValue(fnd.getDisplay());
+                                }
+                            }
                         }
                     }
                 }
