@@ -44,14 +44,21 @@ package org.socraticgrid.fhirlib;
 // import net.sf.saxon.lib.NamespaceConstant;
 import org.socraticgrid.codeconversion.SearchProcessor;
 import org.socraticgrid.codeconversion.elements.CodeReference;
+import org.socraticgrid.codeconversion.elements.CodeSearch;
+import org.socraticgrid.codeconversion.elements.SearchOptions;
 
 import org.socraticgrid.documenttransformer.interfaces.SimpleTransformStep;
 
 import org.springframework.util.xml.SimpleNamespaceContext;
 
+import org.w3c.dom.DOMException;
 import org.w3c.dom.Document;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+
+import org.xml.sax.SAXException;
+
+import java.io.IOException;
 
 import java.util.Iterator;
 import java.util.List;
@@ -62,25 +69,34 @@ import java.util.logging.Logger;
 import javax.annotation.PostConstruct;
 
 import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.transform.TransformerException;
 import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.TransformerFactoryConfigurationError;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpression;
+import javax.xml.xpath.XPathExpressionException;
 import javax.xml.xpath.XPathFactory;
+import javax.xml.xpath.XPathFactoryConfigurationException;
 
 
 /**
- * Replaces codes in FHIR structure based on XPATH This version works specifically on
- * FHIR Data Type CD.
+ * Replaces codes in FHIR structure based on XPATH.
+ *
+ * <p>Possible points</p>
+ *
+ * <p>CD Type CS Type Interrelated XPATHS (With role) - Key and relative paths...</p>
  *
  * @author  Jerry Goodnough
  */
-public class FHIRCodeTranslator implements SimpleTransformStep
+public class ComplexFHIRCodeTranslator implements SimpleTransformStep
 {
+    private static final Logger logger = Logger.getLogger(
+            ComplexFHIRCodeTranslator.class.getName());
     private SearchProcessor codeProcessor;
     private String defaultNamespaceUri = "http://www.w3.org/2005/Atom";
 
@@ -153,6 +169,7 @@ public class FHIRCodeTranslator implements SimpleTransformStep
         this.replacementList = replacementList;
     }
 
+    @Override
     public boolean transform(StreamSource src, StreamResult result)
         throws TransformerException
     {
@@ -161,6 +178,7 @@ public class FHIRCodeTranslator implements SimpleTransformStep
         return this.transform(src, result, null);
     }
 
+    @Override
     public boolean transform(StreamSource src, StreamResult result, Properties props)
         throws TransformerException
     {
@@ -197,61 +215,41 @@ public class FHIRCodeTranslator implements SimpleTransformStep
                 for (int idx = 0; idx < nodesFnd; idx++)
                 {
                     Node x = nodes.item(idx);
-                    Node system = (Node) xpath.evaluate("fhir:system/@value", x,
-                            XPathConstants.NODE);
-                    Node code = (Node) xpath.evaluate("fhir:code/@value", x,
-                            XPathConstants.NODE);
-                    Node display = (Node) xpath.evaluate("fhir:display/@value", x,
-                            XPathConstants.NODE);
-                    String sourceSystem;
+                    String cdType = cr.getCodeType();
 
-                    if (system == null)
+                    switch (cdType)
                     {
-                        sourceSystem = cr.getDefaultSystem();
-                    }
-                    else
-                    {
-                        sourceSystem = system.getNodeValue();
-
-                        if ((sourceSystem == null) || sourceSystem.isEmpty())
+                        case "CD":
                         {
-                            sourceSystem = system.getNodeValue();
-                        }
-                    }
 
-                    // TODO: Fix to generalize for different search types
-                    //
-                    if (code != null)
-                    {
-                        String sourceCode = code.getNodeValue();
-
-                        if ((sourceCode != null) && (!sourceCode.isEmpty()))
-                        {
-                            String sourceText = (display == null)
-                                ? "" : display.getNodeValue();
-                            CodeReference fnd = codeProcessor.findCode(
-                                    cr.getTargetSystem(), sourceSystem, sourceCode,
-                                    sourceText);
-
-                            if (fnd != null)
+                            if (this.handleCD(xpath, x, cr) == true)
                             {
-
-                                if (system != null)
-                                {
-                                    system.setNodeValue(fnd.getSystem());
-                                    conversionOccured = true;
-                                }
-
-                                code.setNodeValue(fnd.getCode());
-
-                                if (cr.getReplaceDisplay() && (display != null))
-                                {
-                                    display.setNodeValue(fnd.getDisplay());
-                                    conversionOccured = true;
-                                }
+                                conversionOccured = true;
                             }
+
+                            break;
+                        }
+                        case "SC":
+                        {
+
+                            if (this.handleCD(xpath, x, cr) == true)
+                            {
+                                conversionOccured = true;
+                            }
+
+                            break;
+                        }
+                        default:
+                        {
+                            logger.log(Level.WARNING,
+                                "ComplexFHIRCodeTranslator called with invalid code type: {0}",
+                                cdType);
+
+                            break;
                         }
                     }
+
+                    // Applies to type Coding
                 }
             }
 
@@ -266,14 +264,132 @@ public class FHIRCodeTranslator implements SimpleTransformStep
                 transformer.transform(source, result);
             }
         }
-        catch (Exception ex)
+        catch (ParserConfigurationException | SAXException | IOException |
+                XPathFactoryConfigurationException | XPathExpressionException |
+                DOMException | TransformerFactoryConfigurationError |
+                TransformerException ex)
         {
-            Logger.getLogger(FHIRCodeTranslator.class.getName()).log(Level.SEVERE,
-                null, ex);
+            logger.log(Level.SEVERE, null, ex);
             throw new TransformerException("Error during transformation", ex);
             // TODO: Throw parser error
         }
 
         return conversionOccured;
+    }
+
+    /**
+     * Handle Coding.
+     *
+     * @param   xpath
+     * @param   x
+     * @param   cr
+     *
+     * @return
+     *
+     * @throws  XPathExpressionException
+     */
+    protected boolean handleCD(XPath xpath, Node x, CodeReplacement cr)
+        throws XPathExpressionException
+    {
+        boolean out = false;
+
+        // Applies to type Coding
+        Node system = (Node) xpath.evaluate("fhir:system/@value", x,
+                XPathConstants.NODE);
+        Node code = (Node) xpath.evaluate("fhir:code/@value", x,
+                XPathConstants.NODE);
+        Node display = (Node) xpath.evaluate("fhir:display/@value", x,
+                XPathConstants.NODE);
+        String sourceSystem;
+
+        if (system == null)
+        {
+            sourceSystem = cr.getDefaultSystem();
+        }
+        else
+        {
+            sourceSystem = system.getNodeValue();
+
+            if ((sourceSystem == null) || sourceSystem.isEmpty())
+            {
+                sourceSystem = system.getNodeValue();
+            }
+        }
+
+        String sourceText = (display == null) ? "" : display.getNodeValue();
+        String sourceCode = (code == null) ? "" : code.getNodeValue();
+        CodeSearch cs = new CodeSearch();
+        cs.setDisplay(sourceText);
+        cs.setSearchType(cr.getSearchType());
+        cs.setTargetSystem(cr.getTargetSystem());
+        cs.setCode(sourceCode);
+        cs.setSystem(sourceSystem);
+
+        CodeReference fnd = codeProcessor.findCode(cs);
+
+        if (fnd != null)
+        {
+
+            if (system != null)
+            {
+                system.setNodeValue(fnd.getSystem());
+                out = true;
+            }
+
+            if (code != null)
+            {
+                code.setNodeValue(fnd.getCode());
+            }
+
+            if (cr.getReplaceDisplay())
+            {
+                display.setNodeValue(fnd.getDisplay());
+                out = true;
+            }
+        }
+
+        return out;
+    }
+
+    /**
+     * Handle Simple Code Lookup.
+     *
+     * @param   xpath
+     * @param   x
+     * @param   cr
+     *
+     * @return
+     *
+     * @throws  XPathExpressionException
+     */
+    protected boolean handleSC(XPath xpath, Node x, CodeReplacement cr)
+        throws XPathExpressionException
+    {
+        boolean out = false;
+        Node code = (Node) xpath.evaluate("@value", x, XPathConstants.NODE);
+        String sourceSystem;
+        sourceSystem = cr.getDefaultSystem();
+
+        String sourceText = "";
+        String sourceCode = (code == null) ? "" : code.getNodeValue();
+        CodeSearch cs = new CodeSearch();
+        cs.setDisplay(sourceText);
+        cs.setSearchType(cr.getSearchType());
+        cs.setTargetSystem(cr.getTargetSystem());
+        cs.setCode(sourceCode);
+        cs.setSystem(sourceSystem);
+
+        CodeReference fnd = codeProcessor.findCode(cs);
+
+        if (fnd != null)
+        {
+
+            if (code != null)
+            {
+                code.setNodeValue(fnd.getCode());
+            }
+        }
+
+        return out;
     }
 }
