@@ -19,7 +19,11 @@ Used to Transform FHIR documents
 ======================================================================================
  Change History:
 ======================================================================================
+Version 1.2
+ ----------------------------------------
 
+    o   Updated Depndancy to use the 1.12 Document Transformer
+    
 Version 1.1 ----------------------------------------
 
     o   Updated for the DocumentTransformer namespace change
